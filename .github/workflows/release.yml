@@ -164,10 +164,42 @@ jobs:
       - name: Build package
         run: uv build
 
-      - name: Publish to PyPI
-        run: uv publish
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+      - name: Authenticate to Google Cloud (OSS Exit Gate)
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: 'projects/305452601764/locations/global/workloadIdentityPools/builders/providers/github'
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+
+      - name: Clean up stale releases from staging repo
+        run: |
+          # clean up stale releases from staging repo
+          packages=$(gcloud artifacts packages list \
+              --project="oss-exit-gate-prod" \
+              --location="us" \
+              --repository="agent-starter-pack--pypi" \
+              --format="value(name)" 2>/dev/null)
+
+          echo "${packages}" | xargs -r -I {} sh -c '
+              package_name=$(basename "{}")
+              echo "Deleting package: $package_name..."
+              gcloud artifacts packages delete "{}" \
+                  --project="oss-exit-gate-prod" \
+                  --location="us" \
+                  --repository="agent-starter-pack--pypi" \
+                  --quiet
+          '
+
+      - name: Publish to PyPI via OSS Exit Gate
+        run: |
+          uv publish \
+            --publish-url "https://us-python.pkg.dev/oss-exit-gate-prod/agent-starter-pack--pypi/" \
+            --username oauth2accesstoken \
+            --password "$(gcloud auth print-access-token)"
+          echo '{"publish_all": true}' > manifest.json
+          gcloud storage cp manifest.json \
+            "gs://oss-exit-gate-prod-projects-bucket/agent-starter-pack/pypi/manifests/manifest-${{ github.run_id }}-${{ github.run_attempt }}.json"
 
       - name: Configure git
         run: |
